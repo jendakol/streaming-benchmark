@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 
-JAVA_OPTS="-Xmx4096m" bash -c "sbt jmh:run -i 10 -wi 5 -f1 -t1 \".*StreamingBenchmark.*\""
+JAVA_OPTS="-Xmx4096m"
+sbt "jmh:run -prof jmh.extras.JFR -i 10 -wi 10 -w 3 -f 2 -t 2 \".*StreamingBenchmark.*\""

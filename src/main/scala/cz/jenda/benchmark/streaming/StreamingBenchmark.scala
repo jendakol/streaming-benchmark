@@ -15,20 +15,18 @@ import scala.concurrent.duration.Duration
 
 @BenchmarkMode(Array(Mode.AverageTime))
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
-@Warmup(iterations = 5, time = 3, timeUnit = TimeUnit.SECONDS)
-@Measurement(iterations = 5, time = 3, timeUnit = TimeUnit.SECONDS)
 @State(Scope.Benchmark)
 class StreamingBenchmark {
-  @Param(Array("2", "5", "10", "20", "50"))
+  @Param(Array("5", "10", "20"))
   var parallelism: Int = _
 
-  @Param(Array("10", "50", "100", "500", "1000", "5000"))
+  @Param(Array("500", "1000", "5000"))
   var items: Int = _
 
-  @Param(Array("100", "500", "1000", "5000", "10000", "50000", "100000", "500000"))
+  @Param(Array("1000", "5000", "10000", "50000"))
   var size: Int = _
 
-  @Param(Array("5", "10", "20", "50", "100"))
+  @Param(Array("5", "10"))
   var threads: Int = _
 
   var schMonix: SchedulerService = _
