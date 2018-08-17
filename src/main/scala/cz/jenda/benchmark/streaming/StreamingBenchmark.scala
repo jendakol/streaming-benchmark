@@ -20,16 +20,16 @@ import scala.concurrent.{Await, ExecutionContext}
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
 class StreamingBenchmark {
-  @Param(Array("5", "10", "20"))
+  @Param(Array("10")) // it's turned out it doesn't affect results in significant way
   var parallelism: Int = _
 
   @Param(Array("500", "1000", "5000"))
   var items: Int = _
 
-  @Param(Array("1000", "5000", "10000", "50000"))
+  @Param(Array("1000", "10000")) // it's turned out it doesn't affect results in significant way
   var size: Int = _
 
-  @Param(Array("5", "10"))
+  @Param(Array("10")) // it's turned out it doesn't affect results in significant way
   var threads: Int = _
 
   var schMonix: SchedulerService = _
