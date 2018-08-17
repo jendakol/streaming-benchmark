@@ -3,5 +3,9 @@ package cz.jenda.benchmark.streaming
 import scala.util.Random
 
 object DataGenerator {
-  def get(bytes: Int): Vector[Byte] = Stream(Random.nextPrintableChar()).map(_.toByte).take(bytes).toVector
+  private val stream = Stream(Random.nextPrintableChar()).map(_.toByte)
+
+  def get(bytes: Int): Array[Byte] = {
+    stream.take(bytes).toArray
+  }
 }
