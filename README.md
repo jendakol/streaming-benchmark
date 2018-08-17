@@ -15,6 +15,8 @@ finally tagless - so we changed the API to `F[A]` and `fs2.Stream[F, A]`.
 Reimplementing the library with FS2 was quite easy but the performance has started to be poor. We did some in-place testing and then decided
 to create a standalone benchmark using [SBT JMH](https://github.com/ktoso/sbt-jmh).
 
+Sad thing is the data will be served through HTTP API with http4s which uses FS2 `Stream` so we cannot avoid it's usage in final consequence.
+
 ## Usage
 ```bash
 ./run.sh
