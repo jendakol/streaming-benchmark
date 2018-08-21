@@ -1,11 +1,14 @@
 package cz.jenda.benchmark.streaming
 
-import java.util.concurrent.{ArrayBlockingQueue, ThreadPoolExecutor, TimeUnit}
+import java.util.concurrent._
 
-import cats.effect.IO
+import cats.Traverse
+import cats.effect.{Concurrent, IO}
+import cats.syntax.all._
 import cz.jenda.benchmark.streaming.StreamingBenchmark._
-import fs2.Stream
+import fs2.async.mutable.Semaphore
 import fs2.interop.reactivestreams._
+import fs2.{Chunk, Pure, Stream}
 import monix.eval.Task
 import monix.execution.Scheduler
 import monix.execution.schedulers.SchedulerService
@@ -13,8 +16,8 @@ import monix.reactive.Observable
 import org.openjdk.jmh.annotations._
 import org.reactivestreams.Publisher
 
+import scala.concurrent._
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext}
 
 @BenchmarkMode(Array(Mode.AverageTime))
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
@@ -23,7 +26,7 @@ class StreamingBenchmark {
   @Param(Array("10")) // it's turned out it doesn't affect results in significant way
   var parallelism: Int = _
 
-  @Param(Array("500", "1000", "5000"))
+  @Param(Array("1000", "5000"))
   var items: Int = _
 
   @Param(Array("1000", "10000")) // it's turned out it doesn't affect results in significant way
@@ -32,35 +35,28 @@ class StreamingBenchmark {
   @Param(Array("10")) // it's turned out it doesn't affect results in significant way
   var threads: Int = _
 
-  var schMonix: SchedulerService = _
-  var schFs2FromMonix: SchedulerService = _
-  var schFs2: SchedulerService = _
-  var ecFs2: ExecutionContext = _
+  var scheduler: SchedulerService = _
+  var execContext: ExecutionContextExecutorService = _
 
   @Setup
   def setup(): Unit = {
-    schMonix = Scheduler {
+    scheduler = Scheduler {
       new ThreadPoolExecutor(threads, threads, 1, TimeUnit.MINUTES, new ArrayBlockingQueue[Runnable](1000))
     }
-    schFs2FromMonix = Scheduler {
-      new ThreadPoolExecutor(threads, threads, 1, TimeUnit.MINUTES, new ArrayBlockingQueue[Runnable](1000))
-    }
-    schFs2 = Scheduler {
-      new ThreadPoolExecutor(threads, threads, 1, TimeUnit.MINUTES, new ArrayBlockingQueue[Runnable](1000))
-    }
-    ecFs2 = ExecutionContext.fromExecutor {
+    execContext = ExecutionContext.fromExecutorService {
       new ThreadPoolExecutor(threads, threads, 1, TimeUnit.MINUTES, new ArrayBlockingQueue[Runnable](1000))
     }
   }
 
   @TearDown
   def tearDown(): Unit = {
-    schMonix.shutdown()
+    scheduler.shutdown()
+    execContext.shutdown()
   }
 
   @Benchmark
   def testMonix(): Unit = {
-    implicit val sch: SchedulerService = schMonix
+    implicit val sch: SchedulerService = scheduler
 
     Observable
       .range(1, items)
@@ -77,7 +73,7 @@ class StreamingBenchmark {
 
   @Benchmark
   def testFs2FromMonix(): Unit = {
-    implicit val sch: SchedulerService = schFs2FromMonix
+    implicit val sch: SchedulerService = scheduler
 
     val publisher: Publisher[Array[Byte]] = {
       Observable
@@ -101,7 +97,7 @@ class StreamingBenchmark {
 
   @Benchmark
   def testFs2Task(): Unit = {
-    implicit val sch: SchedulerService = schFs2
+    implicit val sch: SchedulerService = scheduler
 
     Stream
       .range(1, items)
@@ -119,13 +115,114 @@ class StreamingBenchmark {
 
   @Benchmark
   def testFs2IO(): Unit = {
-    implicit val ec: ExecutionContext = ecFs2
+    implicit val ec: ExecutionContext = execContext
 
     Stream
       .range(1, items)
       .mapAsyncUnordered[IO, Array[Byte]](parallelism) { _ =>
         IO {
           DataGenerator.get(size)
+        }
+      }
+      .map(_.length)
+      .reduce(_ + _)
+      .compile
+      .toList
+      .runAndWait
+  }
+
+  @Benchmark
+  def testFs2Workaround(): Unit = {
+    implicit val ec: ExecutionContext = execContext
+
+    val itemsStream: Stream[Pure, Int] = Stream.range(1, items)
+
+    Stream
+      .eval(Semaphore[IO](parallelism))
+      .flatMap { guard =>
+        Stream.eval(fs2.async.unboundedQueue[IO, Option[Array[Byte]]]).flatMap { queue =>
+          queue.dequeue.unNoneTerminate.concurrently {
+            itemsStream
+              .evalMap[IO, Any] { _ =>
+                guard.decrement >>
+                  Concurrent[IO].start {
+                    IO {
+                      DataGenerator.get(size)
+                    }.flatMap(x => queue.enqueue1(x.some)).attempt >> guard.increment
+                  }
+              }
+              .onFinalize(queue.enqueue1(None))
+          }
+        }
+      }
+      .map(_.length)
+      .reduce(_ + _)
+      .compile
+      .toList
+      .runAndWait
+  }
+
+  @Benchmark
+  def testFs2WorkaroundChunk20(): Unit = {
+    implicit val ec: ExecutionContext = execContext
+
+    val itemsStream: Stream[Pure, Chunk[Int]] = Stream.chunkLimit$extension(Stream.range(1, items))(20)
+
+    Stream
+      .eval(Semaphore[IO](parallelism))
+      .flatMap { guard =>
+        Stream.eval(fs2.async.unboundedQueue[IO, Option[Array[Byte]]]).flatMap { queue =>
+          queue.dequeue.unNoneTerminate.concurrently {
+            itemsStream
+              .evalMap[IO, Chunk[Any]] { chunk =>
+                Traverse[Chunk].sequence {
+                  chunk.map { _ =>
+                    guard.decrement >>
+                      Concurrent[IO].start {
+                        IO {
+                          DataGenerator.get(size)
+                        }.flatMap(x => queue.enqueue1(x.some)).attempt >> guard.increment
+                      }
+                  }
+                }
+              }
+              .onFinalize(queue.enqueue1(None))
+          }
+        }
+      }
+      .map(_.length)
+      .reduce(_ + _)
+      .compile
+      .toList
+      .runAndWait
+  }
+
+  @Benchmark
+  def testFs2WorkaroundChunk100(): Unit = {
+    implicit val ec: ExecutionContext = execContext
+
+    val itemsStream: Stream[Pure, Chunk[Int]] = Stream.chunkLimit$extension(Stream.range(1, items))(100)
+
+    Stream
+      .eval(Semaphore[IO](parallelism))
+      .flatMap { guard =>
+        Stream.eval(fs2.async.unboundedQueue[IO, Option[Array[Byte]]]).flatMap { queue =>
+          queue.dequeue.unNoneTerminate.concurrently {
+            itemsStream
+              .evalMap[IO, Chunk[Any]] { chunk =>
+                Traverse[Chunk].sequence {
+                  chunk.map { _ =>
+                    guard.decrement >>
+                      Concurrent[IO].start {
+                        IO {
+                          DataGenerator.get(size)
+                        }.flatMap(x => queue.enqueue1(x.some)).attempt >> guard.increment
+                      }
+                  }
+                }
+              }
+              .onFinalize(queue.enqueue1(None))
+          }
         }
       }
       .map(_.length)
