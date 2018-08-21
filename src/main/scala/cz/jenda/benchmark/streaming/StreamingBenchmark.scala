@@ -96,24 +96,6 @@ class StreamingBenchmark {
   }
 
   @Benchmark
-  def testFs2Task(): Unit = {
-    implicit val sch: SchedulerService = scheduler
-
-    Stream
-      .range(1, items)
-      .mapAsyncUnordered[Task, Array[Byte]](parallelism) { _ =>
-        Task {
-          DataGenerator.get(size)
-        }
-      }
-      .map(_.length)
-      .reduce(_ + _)
-      .compile
-      .toList
-      .runAndWait
-  }
-
-  @Benchmark
   def testFs2IO(): Unit = {
     implicit val ec: ExecutionContext = execContext
 
