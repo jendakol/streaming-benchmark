@@ -17,7 +17,7 @@ import org.openjdk.jmh.annotations._
 import org.reactivestreams.Publisher
 
 import scala.concurrent._
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.{Duration, _}
 
 @BenchmarkMode(Array(Mode.AverageTime))
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
@@ -26,14 +26,17 @@ class StreamingBenchmark {
   @Param(Array("10")) // it's turned out it doesn't affect results in significant way
   var parallelism: Int = _
 
-  @Param(Array("1000", "5000"))
+  @Param(Array("1000"))
   var items: Int = _
 
-  @Param(Array("1000", "10000")) // it's turned out it doesn't affect results in significant way
+  @Param(Array("5000")) // it's turned out it doesn't affect results in significant way
   var size: Int = _
 
   @Param(Array("10")) // it's turned out it doesn't affect results in significant way
   var threads: Int = _
+
+  @Param(Array("1.5", "3"))
+  var taskLength: Double = _
 
   var scheduler: SchedulerService = _
   var execContext: ExecutionContextExecutorService = _
@@ -63,7 +66,7 @@ class StreamingBenchmark {
       .mapParallelUnordered[Array[Byte]](parallelism) { _ =>
         Task {
           DataGenerator.get(size)
-        }
+        }.delayResult(taskLength.seconds)
       }
       .map(_.length)
       .reduce(_ + _)
@@ -81,7 +84,7 @@ class StreamingBenchmark {
         .mapParallelUnordered[Array[Byte]](parallelism) { _ =>
           Task {
             DataGenerator.get(size)
-          }
+          }.delayResult(taskLength.seconds)
         }
         .toReactivePublisher[Array[Byte]]
     }
@@ -102,7 +105,7 @@ class StreamingBenchmark {
     Stream
       .range(1, items)
       .mapAsyncUnordered[IO, Array[Byte]](parallelism) { _ =>
-        IO {
+        IO.sleep(taskLength.seconds) >> IO {
           DataGenerator.get(size)
         }
       }
@@ -128,7 +131,7 @@ class StreamingBenchmark {
               .evalMap[IO, Any] { _ =>
                 guard.decrement >>
                   Concurrent[IO].start {
-                    IO {
+                    IO.sleep(taskLength.seconds) >> IO {
                       DataGenerator.get(size)
                     }.flatMap(x => queue.enqueue1(x.some)).attempt >> guard.increment
                   }
@@ -161,7 +164,7 @@ class StreamingBenchmark {
                   chunk.map { _ =>
                     guard.decrement >>
                       Concurrent[IO].start {
-                        IO {
+                        IO.sleep(taskLength.seconds) >> IO {
                           DataGenerator.get(size)
                         }.flatMap(x => queue.enqueue1(x.some)).attempt >> guard.increment
                       }
@@ -175,7 +178,7 @@ class StreamingBenchmark {
       .map(_.length)
       .reduce(_ + _)
       .compile
-      .toList
+      .drain
       .runAndWait
   }
 
@@ -196,7 +199,7 @@ class StreamingBenchmark {
                   chunk.map { _ =>
                     guard.decrement >>
                       Concurrent[IO].start {
-                        IO {
+                        IO.sleep(taskLength.seconds) >> IO {
                           DataGenerator.get(size)
                         }.flatMap(x => queue.enqueue1(x.some)).attempt >> guard.increment
                       }
@@ -210,7 +213,7 @@ class StreamingBenchmark {
       .map(_.length)
       .reduce(_ + _)
       .compile
-      .toList
+      .drain
       .runAndWait
   }
 
